@@ -6,7 +6,6 @@ import os
 import re
 import json
 import threading
-import time
 from datetime import datetime
 from flask import Flask, request
 
@@ -14,7 +13,7 @@ from flask import Flask, request
 BOT_TOKEN = "8434128207:AAH-BnEeeW1pR2X2n1OjrUs2NtWJGPh8Qs8"
 ADMIN_ID = "8518408753"
 
-# Required channels
+# Required channels (must join)
 REQUIRED_CHANNELS = [
     {"username": "@SQFORCEZONE", "url": "https://t.me/SQFORCEZONE", "name": "SQ FORCE ZONE"},
     {"username": "@WahidModeX", "url": "https://t.me/WahidModeX", "name": "Wahid Mode X"}
@@ -23,7 +22,7 @@ REQUIRED_CHANNELS = [
 # Bot creators
 CREATORS = ["@Kingwahid", "@XFPro43"]
 
-# Flask app
+# Flask app for health check
 app = Flask(__name__)
 
 # Bot instance
@@ -55,7 +54,7 @@ def update_user(user_id):
     total_users.add(str(user_id))
     save_users()
 
-# ==================== CHECK MEMBERSHIP (using bot API) ====================
+# ==================== CHECK MEMBERSHIP (using Bot API) ====================
 def is_user_member(user_id):
     try:
         for channel in REQUIRED_CHANNELS:
@@ -78,9 +77,9 @@ def get_not_joined_channels(user_id):
             not_joined.append(channel)
     return not_joined
 
-# ==================== DOWNLOAD VIDEO ====================
+# ==================== DOWNLOAD VIDEO (with fallback) ====================
 def download_video(url, user_id):
-    # Create a cookies file to avoid bot detection (optional but recommended)
+    # Create a dummy cookies file (helps avoid some blocks)
     cookies_file = "cookies.txt"
     if not os.path.exists(cookies_file):
         with open(cookies_file, "w") as f:
@@ -103,7 +102,7 @@ def download_video(url, user_id):
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             
-            # Fix extension
+            # Fix extension if needed
             if not os.path.exists(filename):
                 for ext in ['.mp4', '.webm', '.mkv']:
                     test_file = filename.rsplit('.', 1)[0] + ext
@@ -156,7 +155,7 @@ def get_main_menu():
     keyboard.add(btn1, btn2, btn3, btn4)
     return keyboard
 
-# ==================== HANDLERS ====================
+# ==================== TELEGRAM HANDLERS ====================
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
@@ -263,36 +262,23 @@ def handle_message(message):
     else:
         bot.edit_message_text("❌ **Download failed!**\n\nPossible reasons:\n• Invalid link\n• Private video\n• Unsupported platform\n• YouTube blocked (try another link)", user_id, msg.message_id)
 
-# ==================== FLASK WEBHOOK (for Render) ====================
+# ==================== FLASK SERVER (for Render health checks) ====================
 @app.route('/')
 def home():
     return f"Bot running. Total users: {len(total_users)}"
 
-@app.route(f'/webhook/{BOT_TOKEN}', methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return 'OK', 200
-    return 'Bad Request', 400
-
-def set_webhook():
-    # Use Render's public URL - you need to replace with your actual Render URL
-    render_url = "https://your-bot-name.onrender.com"  # CHANGE THIS
-    webhook_url = f"{render_url}/webhook/{BOT_TOKEN}"
-    result = bot.set_webhook(url=webhook_url)
-    print(f"Webhook set: {result}")
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
 
 # ==================== MAIN ====================
 if __name__ == "__main__":
     load_users()
     os.makedirs("downloads", exist_ok=True)
     
-    # Remove webhook and start polling (simpler for Render)
+    # Remove webhook and start polling (works perfectly on Render)
     bot.remove_webhook()
     
-    # Start bot polling in a separate thread
+    # Start bot polling in a background thread
     def poll_bot():
         print("Bot polling started...")
         bot.infinity_polling(timeout=10, long_polling_timeout=5)
@@ -300,6 +286,6 @@ if __name__ == "__main__":
     bot_thread = threading.Thread(target=poll_bot, daemon=True)
     bot_thread.start()
     
-    # Start Flask server for health checks
+    # Start Flask server (keeps Render from sleeping)
     print("Flask server running on port 8080...")
-    app.run(host='0.0.0.0', port=8080)
+    run_flask()
