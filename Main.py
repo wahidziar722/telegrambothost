@@ -8,13 +8,13 @@ import threading
 from flask import Flask, request
 
 # ==================== CONFIG ====================
-BOT_TOKEN = "8607359712:AAGVPHwLolvKL7MZUp16nHcY00yf3bP0R60"
+BOT_TOKEN = "8434128207:AAH-BnEeeW1pR2X2n1OjrUs2NtWJGPh8Qs8"
 ADMIN_ID = "8518408753"
 
 # Required channels
 REQUIRED_CHANNELS = [
     {"username": "@WahidModeX", "url": "https://t.me/WahidModeX"},
-    {"username": "@ProTech43", "url": "https://t.me/ProTech43"}
+    {"username": "@SQFORCEZONE", "url": "https://t.me/SQFORCEZONE"}
 ]
 
 # Flask app for webhook
