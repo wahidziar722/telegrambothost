@@ -4,16 +4,14 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import yt_dlp
 import os
 import re
-import json
+from flask import Flask
 import threading
-from datetime import datetime
-from flask import Flask, request
 
-# ==================== CONFIG ====================
+# ==================== CONFIGURATION ====================
 BOT_TOKEN = "8434128207:AAH-BnEeeW1pR2X2n1OjrUs2NtWJGPh8Qs8"
 ADMIN_ID = "8518408753"
 
-# Required channels (must join)
+# Required channels
 REQUIRED_CHANNELS = [
     {"username": "@SQFORCEZONE", "url": "https://t.me/SQFORCEZONE", "name": "SQ FORCE ZONE"},
     {"username": "@WahidModeX", "url": "https://t.me/WahidModeX", "name": "Wahid Mode X"}
@@ -22,270 +20,155 @@ REQUIRED_CHANNELS = [
 # Bot creators
 CREATORS = ["@Kingwahid", "@XFPro43"]
 
-# Flask app for health check
-app = Flask(__name__)
-
 # Bot instance
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Data storage
-user_verified = {}
-total_users = set()
-users_file = "users.json"
+# Store verified users (in memory, but will reset on restart)
+verified_users = set()
 
-# ==================== DATA FUNCTIONS ====================
-def save_users():
-    try:
-        with open(users_file, "w") as f:
-            json.dump(list(total_users), f)
-    except:
-        pass
+# Flask app for health check
+app = Flask(__name__)
 
-def load_users():
-    global total_users
-    try:
-        with open(users_file, "r") as f:
-            data = json.load(f)
-            total_users = set(data)
-    except:
-        total_users = set()
-
-def update_user(user_id):
-    total_users.add(str(user_id))
-    save_users()
-
-# ==================== CHECK MEMBERSHIP (using Bot API) ====================
+# ==================== CHECK MEMBERSHIP ====================
 def is_user_member(user_id):
-    try:
-        for channel in REQUIRED_CHANNELS:
-            chat_member = bot.get_chat_member(channel["username"], user_id)
-            if chat_member.status in ['left', 'kicked']:
-                return False
-        return True
-    except Exception as e:
-        print(f"Check error: {e}")
-        return False
-
-def get_not_joined_channels(user_id):
-    not_joined = []
-    for channel in REQUIRED_CHANNELS:
+    for ch in REQUIRED_CHANNELS:
         try:
-            chat_member = bot.get_chat_member(channel["username"], user_id)
-            if chat_member.status in ['left', 'kicked']:
-                not_joined.append(channel)
+            member = bot.get_chat_member(ch["username"], user_id)
+            if member.status in ['left', 'kicked']:
+                return False
         except:
-            not_joined.append(channel)
-    return not_joined
+            return False
+    return True
 
-# ==================== DOWNLOAD VIDEO (with fallback) ====================
-def download_video(url, user_id):
-    # Create a dummy cookies file (helps avoid some blocks)
-    cookies_file = "cookies.txt"
-    if not os.path.exists(cookies_file):
-        with open(cookies_file, "w") as f:
-            f.write("# Netscape HTTP Cookie File\n")
-    
-    download_path = f"downloads/{user_id}"
-    os.makedirs(download_path, exist_ok=True)
-    
-    ydl_opts = {
-        'outtmpl': f'{download_path}/%(title)s.%(ext)s',
-        'format': 'best[height<=720]',
-        'quiet': True,
-        'no_warnings': True,
-        'cookiefile': cookies_file,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    }
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            
-            # Fix extension if needed
-            if not os.path.exists(filename):
-                for ext in ['.mp4', '.webm', '.mkv']:
-                    test_file = filename.rsplit('.', 1)[0] + ext
-                    if os.path.exists(test_file):
-                        filename = test_file
-                        break
-            
-            # Extract stats
-            duration = info.get('duration', 0)
-            minutes = duration // 60
-            seconds = duration % 60
-            stats = {
-                'title': info.get('title', 'Unknown'),
-                'channel': info.get('uploader', 'Unknown'),
-                'duration': f"{minutes}:{seconds:02d}",
-                'views': f"{info.get('view_count', 0):,}",
-                'likes': f"{info.get('like_count', 0):,}",
-                'comments': f"{info.get('comment_count', 0):,}"
-            }
-            return filename, stats
-    except Exception as e:
-        print(f"Download error: {e}")
-        return None, None
-
-# ==================== BUTTONS ====================
 def get_join_buttons():
     keyboard = InlineKeyboardMarkup(row_width=1)
     for ch in REQUIRED_CHANNELS:
-        btn = InlineKeyboardButton(f"📢 Join {ch['name']}", url=ch['url'])
-        keyboard.add(btn)
-    verify_btn = InlineKeyboardButton("✅ I Have Joined - Verify", callback_data="verify")
-    keyboard.add(verify_btn)
+        keyboard.add(InlineKeyboardButton(f"Join {ch['username']}", url=ch['url']))
+    keyboard.add(InlineKeyboardButton("✅ I have joined", callback_data="check"))
     return keyboard
 
-def get_fail_buttons(not_joined):
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    for ch in not_joined:
-        btn = InlineKeyboardButton(f"📢 Join {ch['name']}", url=ch['url'])
-        keyboard.add(btn)
-    retry_btn = InlineKeyboardButton("🔄 Try Again", callback_data="verify")
-    keyboard.add(retry_btn)
-    return keyboard
+# ==================== ADVANCED DOWNLOAD FUNCTION ====================
+def download_video(url):
+    """
+    This function uses yt-dlp with advanced options to ensure maximum
+    compatibility and success in downloading videos from various platforms.
+    """
+    os.makedirs("downloads", exist_ok=True)
 
-def get_main_menu():
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    btn1 = InlineKeyboardButton("📥 Download Video", callback_data="download")
-    btn2 = InlineKeyboardButton("👨‍💻 Creators", callback_data="creators")
-    btn3 = InlineKeyboardButton("📊 Stats", callback_data="stats")
-    btn4 = InlineKeyboardButton("🎨 Sticker", callback_data="sticker")
-    keyboard.add(btn1, btn2, btn3, btn4)
-    return keyboard
+    # yt-dlp advanced configuration for maximum compatibility
+    ydl_opts = {
+        'outtmpl': 'downloads/%(title)s.%(ext)s',
+        'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+        'merge_output_format': 'mp4',
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'nooverwrites': True,
+        'continuedl': True,
+        'cookiefile': 'cookies.txt',
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'geo_bypass': True,
+    }
 
-# ==================== TELEGRAM HANDLERS ====================
+    try:
+        # Attempt to download with the advanced configuration
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+
+            # Check if the file was created, handle different extensions
+            if not os.path.exists(filename):
+                for ext in ['.mp4', '.webm', '.mkv']:
+                    test = filename.rsplit('.', 1)[0] + ext
+                    if os.path.exists(test):
+                        filename = test
+                        break
+
+            # Extract video information for the user
+            video_info = {
+                'title': info.get('title', 'Unknown Title'),
+                'duration': info.get('duration', 0),
+                'likes': info.get('like_count', 0),
+                'dislikes': info.get('dislike_count', 0),
+                'view_count': info.get('view_count', 0),
+            }
+            return filename, video_info
+
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return None, None
+
+# ==================== BOT HANDLERS ====================
 @bot.message_handler(commands=['start'])
-def start_command(message):
+def start(message):
     user_id = message.from_user.id
-    update_user(user_id)
-    total = len(total_users)
-    
-    welcome = f"""🚀 **Video Downloader Bot**
+    if user_id in verified_users:
+        bot.reply_to(message, "🎬 Welcome back! Send me a video link from YouTube, Instagram, TikTok, Facebook, Twitter, and more. I'll download it for you!")
+        return
 
-👥 **Total Users:** {total}+
+    text = "📢 **You must join these channels first:**\n"
+    for ch in REQUIRED_CHANNELS:
+        text += f"• {ch['username']}\n"
+    text += "\nAfter joining, click the button below."
+    bot.send_message(user_id, text, parse_mode='Markdown', reply_markup=get_join_buttons())
 
-📢 **You must join both channels to use this bot:**
-{chr(10).join([f"• {ch['name']}" for ch in REQUIRED_CHANNELS])}
-
-✅ After joining, click the button below."""
-    
-    bot.send_message(user_id, welcome, parse_mode='Markdown', reply_markup=get_join_buttons())
-
-@bot.callback_query_handler(func=lambda call: call.data == "verify")
-def verify_callback(call):
+@bot.callback_query_handler(func=lambda call: call.data == "check")
+def check_callback(call):
     user_id = call.from_user.id
     if is_user_member(user_id):
-        user_verified[user_id] = True
-        bot.edit_message_text("✅ **Verification Successful!**\n\nNow you can download videos.", user_id, call.message.message_id)
-        bot.send_message(user_id, "📎 **Send me a video link:**", reply_markup=get_main_menu())
+        verified_users.add(user_id)
+        bot.edit_message_text("✅ **Verification successful!** Now send me a video link.", user_id, call.message.message_id)
     else:
-        not_joined = get_not_joined_channels(user_id)
-        channels_text = "\n".join([f"❌ {ch['name']}" for ch in not_joined])
-        bot.answer_callback_query(call.id, "Join all channels first!", show_alert=True)
-        bot.edit_message_text(f"❌ **Not joined:**\n{channels_text}\n\nPlease join and verify again.", user_id, call.message.message_id, reply_markup=get_fail_buttons(not_joined))
-
-@bot.callback_query_handler(func=lambda call: call.data == "download")
-def download_callback(call):
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.from_user.id, "📎 **Send me the video link:**")
-
-@bot.callback_query_handler(func=lambda call: call.data == "creators")
-def creators_callback(call):
-    text = f"👨‍💻 **Bot Creators:**\n{chr(10).join(CREATORS)}\n\n📢 **Channels:**\n@SQFORCEZONE\n@WahidModeX"
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.from_user.id, text, parse_mode='Markdown')
-
-@bot.callback_query_handler(func=lambda call: call.data == "stats")
-def stats_callback(call):
-    total = len(total_users)
-    verified = len(user_verified)
-    text = f"📊 **Stats**\n\n👥 Total Users: {total}\n✅ Verified: {verified}\n🟢 Status: Active"
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.from_user.id, text, parse_mode='Markdown')
-
-@bot.callback_query_handler(func=lambda call: call.data == "sticker")
-def sticker_callback(call):
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.from_user.id, "🎨 **Stickers coming soon!** Stay tuned @WahidModeX", parse_mode='Markdown')
+        bot.answer_callback_query(call.id, "You haven't joined both channels yet!", show_alert=True)
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     user_id = message.from_user.id
-    text = message.text
-    
-    # Check verification
-    if not user_verified.get(user_id, False):
-        if not is_user_member(user_id):
-            not_joined = get_not_joined_channels(user_id)
-            channels_text = "\n".join([f"❌ {ch['name']}" for ch in not_joined])
-            bot.send_message(user_id, f"❌ **Access Denied!**\n\nJoin these channels:\n{channels_text}", reply_markup=get_fail_buttons(not_joined))
-            return
-        else:
-            user_verified[user_id] = True
-    
-    # Extract URL
-    url_pattern = re.compile(r'https?://[^\s]+')
-    urls = url_pattern.findall(text)
-    if not urls:
-        bot.send_message(user_id, "📎 **Send a valid video link** (YouTube, Instagram, TikTok, Facebook, Twitter)", reply_markup=get_main_menu())
+    if user_id not in verified_users and not is_user_member(user_id):
+        bot.reply_to(message, "❌ Please send /start and join the channels first.")
         return
-    
-    url = urls[0]
-    msg = bot.send_message(user_id, "📊 **Getting video info & downloading...**\nThis may take up to 30 seconds.")
-    
-    # Download
-    video_path, stats = download_video(url, user_id)
-    
+
+    text = message.text
+    url_match = re.search(r'https?://[^\s]+', text)
+    if not url_match:
+        bot.reply_to(message, "❌ Please send a valid video link.")
+        return
+
+    url = url_match.group(0)
+    msg = bot.reply_to(message, "⏬ Downloading... This may take a few moments depending on the video size and server load.")
+
+    video_path, info = download_video(url)
     if video_path and os.path.exists(video_path):
-        bot.edit_message_text("📤 **Uploading video...**", user_id, msg.message_id)
-        caption = f"""✅ **Download Complete!**
-
-📌 **Title:** {stats['title']}
-👤 **Channel:** {stats['channel']}
-⏱️ **Duration:** {stats['duration']}
-❤️ **Likes:** {stats['likes']}
-💬 **Comments:** {stats['comments']}
-👁️ **Views:** {stats['views']}
-
-🎬 Enjoy!"""
         try:
-            with open(video_path, 'rb') as f:
-                bot.send_video(user_id, f, caption=caption, parse_mode='Markdown', timeout=120)
-            bot.delete_message(user_id, msg.message_id)
-            # Cleanup
+            # Prepare a detailed caption
+            duration = info['duration']
+            minutes = duration // 60
+            seconds = duration % 60
+            caption = (
+                f"✅ **{info['title']}**\n\n"
+                f"⏱️ Duration: {minutes}:{seconds:02d}\n"
+                f"❤️ Likes: {info['likes']:,} | 👎 Dislikes: {info['dislikes']:,}\n"
+                f"👁️ Views: {info['view_count']:,}\n\n"
+                f"🎬 Enjoy your video!"
+            )
+            with open(video_path, 'rb') as v:
+                bot.send_video(message.chat.id, v, caption=caption, parse_mode='Markdown', timeout=180)
+            bot.delete_message(message.chat.id, msg.message_id)
             os.remove(video_path)
-            os.rmdir(f"downloads/{user_id}")
         except Exception as e:
-            bot.edit_message_text(f"❌ **Upload error:** {str(e)[:100]}", user_id, msg.message_id)
+            bot.edit_message_text(f"❌ Upload failed: {str(e)[:100]}", message.chat.id, msg.message_id)
     else:
-        bot.edit_message_text("❌ **Download failed!**\n\nPossible reasons:\n• Invalid link\n• Private video\n• Unsupported platform\n• YouTube blocked (try another link)", user_id, msg.message_id)
+        bot.edit_message_text("❌ Download failed. Please check the link and try again. The video might be private, age-restricted, or from an unsupported source.", message.chat.id, msg.message_id)
 
-# ==================== FLASK SERVER (for Render health checks) ====================
+# ==================== FLASK HEALTH CHECK ====================
 @app.route('/')
 def home():
-    return f"Bot running. Total users: {len(total_users)}"
+    return "Bot is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
-# ==================== MAIN ====================
 if __name__ == "__main__":
-    load_users()
-    os.makedirs("downloads", exist_ok=True)
-    
-    # Remove webhook and start polling (works perfectly on Render)
-    bot.remove_webhook()
-    
-    # Start bot polling in a background thread
-    def poll_bot():
-        print("Bot polling started...")
-        bot.infinity_polling(timeout=10, long_polling_timeout=5)
-    
-    bot_thread = threading.Thread(target=poll_bot, daemon=True)
-    bot_thread.start()
-    
-    # Start Flask server (keeps Render from sleeping)
-    print("Flask server running on port 8080...")
-    run_flask()
+    threading.Thread(target=run_flask, daemon=True).start()
+    print("Bot started...")
+    bot.infinity_polling()
