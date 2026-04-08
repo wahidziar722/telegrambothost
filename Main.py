@@ -4,12 +4,12 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import yt_dlp
 import os
 import re
-from flask import Flask
+import json
 import threading
+from flask import Flask, request
 
-# ==================== CONFIGURATION ====================
+# ==================== CONFIG ====================
 BOT_TOKEN = "8434128207:AAH-BnEeeW1pR2X2n1OjrUs2NtWJGPh8Qs8"
-ADMIN_ID = "8518408753"
 
 # Required channels
 REQUIRED_CHANNELS = [
@@ -23,13 +23,34 @@ CREATORS = ["@Kingwahid", "@XFPro43"]
 # Bot instance
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Store verified users (in memory, but will reset on restart)
+# Store verified users
 verified_users = set()
+total_users = set()
+users_file = "users.json"
 
 # Flask app for health check
 app = Flask(__name__)
 
-# ==================== CHECK MEMBERSHIP ====================
+def save_users():
+    try:
+        with open(users_file, "w") as f:
+            json.dump(list(total_users), f)
+    except:
+        pass
+
+def load_users():
+    global total_users
+    try:
+        with open(users_file, "r") as f:
+            data = json.load(f)
+            total_users = set(data)
+    except:
+        total_users = set()
+
+def update_user(user_id):
+    total_users.add(str(user_id))
+    save_users()
+
 def is_user_member(user_id):
     for ch in REQUIRED_CHANNELS:
         try:
@@ -47,69 +68,72 @@ def get_join_buttons():
     keyboard.add(InlineKeyboardButton("✅ I have joined", callback_data="check"))
     return keyboard
 
-# ==================== ADVANCED DOWNLOAD FUNCTION ====================
+# ==================== ENHANCED DOWNLOAD FUNCTION ====================
 def download_video(url):
-    """
-    This function uses yt-dlp with advanced options to ensure maximum
-    compatibility and success in downloading videos from various platforms.
-    """
     os.makedirs("downloads", exist_ok=True)
-
-    # yt-dlp advanced configuration for maximum compatibility
+    
+    # Use cookies file
+    cookies_file = "cookies.txt"
+    if not os.path.exists(cookies_file):
+        with open(cookies_file, "w") as f:
+            f.write("# Netscape HTTP Cookie File\n")
+    
     ydl_opts = {
         'outtmpl': 'downloads/%(title)s.%(ext)s',
-        'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
-        'merge_output_format': 'mp4',
-        'quiet': True,
-        'no_warnings': True,
-        'ignoreerrors': True,
-        'nooverwrites': True,
-        'continuedl': True,
-        'cookiefile': 'cookies.txt',
+        'format': 'best[height<=720]',
+        'quiet': False,
+        'no_warnings': False,
+        'cookiefile': cookies_file,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'geo_bypass': True,
+        'extract_flat': False,
     }
-
+    
     try:
-        # Attempt to download with the advanced configuration
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
-
-            # Check if the file was created, handle different extensions
+            
+            # Fix extension if needed
             if not os.path.exists(filename):
                 for ext in ['.mp4', '.webm', '.mkv']:
                     test = filename.rsplit('.', 1)[0] + ext
                     if os.path.exists(test):
                         filename = test
                         break
-
-            # Extract video information for the user
-            video_info = {
-                'title': info.get('title', 'Unknown Title'),
-                'duration': info.get('duration', 0),
-                'likes': info.get('like_count', 0),
-                'dislikes': info.get('dislike_count', 0),
-                'view_count': info.get('view_count', 0),
+            
+            # Extract video info for caption
+            duration = info.get('duration', 0)
+            minutes = duration // 60
+            seconds = duration % 60
+            stats = {
+                'title': info.get('title', 'Unknown'),
+                'channel': info.get('uploader', 'Unknown'),
+                'duration': f"{minutes}:{seconds:02d}",
+                'views': f"{info.get('view_count', 0):,}",
+                'likes': f"{info.get('like_count', 0):,}",
+                'comments': f"{info.get('comment_count', 0):,}"
             }
-            return filename, video_info
-
+            return filename, stats
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        print(f"Download error: {e}")
         return None, None
 
 # ==================== BOT HANDLERS ====================
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
+    update_user(user_id)
+    total = len(total_users)
+    
     if user_id in verified_users:
-        bot.reply_to(message, "🎬 Welcome back! Send me a video link from YouTube, Instagram, TikTok, Facebook, Twitter, and more. I'll download it for you!")
+        bot.reply_to(message, f"🎬 Welcome back! Total users: {total}. Send me a video link (YouTube, Instagram, TikTok, etc.) and I'll download it for you!")
         return
-
-    text = "📢 **You must join these channels first:**\n"
+    
+    text = f"📢 **You must join these channels first:**\n"
     for ch in REQUIRED_CHANNELS:
         text += f"• {ch['username']}\n"
-    text += "\nAfter joining, click the button below."
+    text += f"\n👥 **Total Users:** {total}+\n\nAfter joining, click the button below."
     bot.send_message(user_id, text, parse_mode='Markdown', reply_markup=get_join_buttons())
 
 @bot.callback_query_handler(func=lambda call: call.data == "check")
@@ -133,24 +157,14 @@ def handle_message(message):
     if not url_match:
         bot.reply_to(message, "❌ Please send a valid video link.")
         return
-
+    
     url = url_match.group(0)
     msg = bot.reply_to(message, "⏬ Downloading... This may take a few moments depending on the video size and server load.")
-
-    video_path, info = download_video(url)
+    
+    video_path, stats = download_video(url)
     if video_path and os.path.exists(video_path):
         try:
-            # Prepare a detailed caption
-            duration = info['duration']
-            minutes = duration // 60
-            seconds = duration % 60
-            caption = (
-                f"✅ **{info['title']}**\n\n"
-                f"⏱️ Duration: {minutes}:{seconds:02d}\n"
-                f"❤️ Likes: {info['likes']:,} | 👎 Dislikes: {info['dislikes']:,}\n"
-                f"👁️ Views: {info['view_count']:,}\n\n"
-                f"🎬 Enjoy your video!"
-            )
+            caption = f"✅ **{stats['title']}**\n\n⏱️ Duration: {stats['duration']}\n❤️ Likes: {stats['likes']} | 💬 Comments: {stats['comments']}\n👁️ Views: {stats['views']}\n\n🎬 Enjoy your video!"
             with open(video_path, 'rb') as v:
                 bot.send_video(message.chat.id, v, caption=caption, parse_mode='Markdown', timeout=180)
             bot.delete_message(message.chat.id, msg.message_id)
@@ -163,12 +177,26 @@ def handle_message(message):
 # ==================== FLASK HEALTH CHECK ====================
 @app.route('/')
 def home():
-    return "Bot is running!"
+    return f"Bot is running! Total users: {len(total_users)}"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    print("Bot started...")
-    bot.infinity_polling()
+    load_users()
+    os.makedirs("downloads", exist_ok=True)
+    
+    # Remove webhook and start polling
+    bot.remove_webhook()
+    
+    # Start bot polling in a background thread
+    def poll_bot():
+        print("Bot polling started...")
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    
+    bot_thread = threading.Thread(target=poll_bot, daemon=True)
+    bot_thread.start()
+    
+    # Start Flask server
+    print("Flask server running on port 8080...")
+    run_flask()
