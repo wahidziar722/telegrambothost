@@ -4,8 +4,6 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 import yt_dlp
 import os
 import re
-import requests
-from datetime import datetime
 import threading
 from flask import Flask
 
@@ -16,75 +14,89 @@ BOT_CREATOR = "@Kingwahidafg"
 # Bot instance
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Flask app for health check (keeps Render alive)
+# Flask app for health check
 app = Flask(__name__)
 
 # Storage
-user_languages = {}
-user_contacts = {}
-user_phones = {}
-online_users = set()
+user_langs = {}
 
-# ==================== WELCOME MESSAGES ====================
-WELCOME_TEXTS = {
+# ==================== YT-DLP OPTIONS (Optimized for all platforms) ====================
+def get_ydl_opts():
+    return {
+        'format': 'best[height<=720]/best',
+        'outtmpl': 'downloads/%(title)s.%(ext)s',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'extractor_args': {
+            'youtube': {
+                'skip': ['dash', 'hls'],
+            },
+            'tiktok': {
+                'embed_url': ['https://www.tiktok.com/'],
+            }
+        }
+    }
+
+# ==================== LANGUAGE SETTINGS ====================
+LANGUAGES = {
     'english': {
-        'welcome': "🔥 *WAHIDX DOWNLOADER* 🔥\n\n✨ *Welcome* {name}! ✨\n└ 👤 Username: @{username}\n└ 📞 Phone: {phone}\n└ 🤖 Bot Creator: {creator}\n\n💫 *I can download videos from:*\n📌 YouTube | Instagram | TikTok\n📌 Twitter/X | Facebook | Reddit\n📌 And 1000+ more!\n\n⚡ *Just send me any video link!*",
-        'instruction': "\n\n📥 *How to use:* Send any video link\n🎯 *Max size:* 50MB\n👥 *Users:* {total}",
-        'error': "❌ *Invalid URL!*\n\nPlease send a valid video link.",
-        'downloading': "🔄 *Downloading...* Please wait!",
+        'start': "🎬 *Universal Video Downloader*\n\nSend me any video link from:\n\n📌 YouTube\n📌 TikTok\n📌 Facebook\n📌 Instagram\n📌 Twitter/X\n📌 Reddit\n📌 And 1000+ more!\n\n⚡ *Just send the link!*",
+        'error': "❌ *Invalid link!*\n\nPlease send a valid video link.",
+        'downloading': "🔄 *Downloading video...*\n\nPlease wait!",
         'uploading': "📤 *Uploading video...*",
-        'success': "✅ *Video Downloaded Successfully!*",
-        'failed': "❌ *Download failed!*\n\nContact {creator}",
-        'large': "❌ *File too large!*\n\nSize: {size}MB\nTelegram limit: 50MB"
+        'success': "✅ *Video downloaded successfully!*",
+        'failed': "❌ *Download failed!*\n\nPossible reasons:\n• Invalid link\n• Private video\n• Video too long\n\nContact {creator}",
+        'large': "❌ *File too large!*\n\nSize: {size}MB\nTelegram limit: 50MB",
+        'no_url': "❌ *No valid link found!*\n\nPlease send a video link from YouTube, TikTok, Facebook, etc.",
+        'help': "📚 *Help*\n\n1. Send any video link\n2. Wait for download\n3. Get your video\n\nSupported: YouTube, TikTok, Facebook, Instagram, Twitter, Reddit, Vimeo, Dailymotion, Twitch, and more!\n\n👨‍💻 Creator: {creator}",
+        'choose_lang': "🌐 *Choose your language:*",
+        'lang_selected': "✅ *Language changed to English!*\n\nSend any video link to download."
     },
     'pashto': {
-        'welcome': "🔥 *واهدکس ډاونلوډر* 🔥\n\n✨ *ښه راغلاست* {name}! ✨\n└ 👤 یوزرنیم: @{username}\n└ 📞 شمیره: {phone}\n└ 🤖 بوټ جوړونکی: {creator}\n\n💫 *زه کولای شم د دې پلیټفارمونو څخه ویډیوګانې ډاونلوډ کړم:*\n📌 یوټیوب | انسټاګرام | ټیکټاک\n📌 تویټر/X | فیسبوک | ریډیټ\n📌 او ۱۰۰۰+ نور!\n\n⚡ *یوازې ما ته د ویډیو لینک راولیږئ!*",
-        'instruction': "\n\n📥 *د کارولو طریقه:* ویډیو لینک رالیږئ\n🎯 *اعظمي اندازه:* 50MB\n👥 *کارونکي:* {total}",
-        'error': "❌ *غلط لینک!*\n\nمهرباني وکړئ یو سم ویډیو لینک راولیږئ.",
-        'downloading': "🔄 *ډاونلوډ کوم...* مهرباني وکړئ انتظار وکړئ!",
+        'start': "🎬 *عمومي ویډیو ډاونلوډر*\n\nما ته د دې پلیټفارمونو څخه د ویډیو لینک رالیږئ:\n\n📌 یوټیوب\n📌 تیک تاک\n📌 فیسبوک\n📌 انسټاګرام\n📌 تویټر/X\n📌 ریډیټ\n📌 او ۱۰۰۰+ نور!\n\n⚡ *یوازې لینک رالیږئ!*",
+        'error': "❌ *غلط لینک!*\n\nمهرباني وکړئ یو سم ویډیو لینک رالیږئ.",
+        'downloading': "🔄 *ویډیو ډاونلوډ کوم...*\n\nمهرباني وکړئ انتظار وکړئ!",
         'uploading': "📤 *ویډیو اپلوډ کوم...*",
         'success': "✅ *ویډیو په بریالیتوب سره ډاونلوډ شوه!*",
-        'failed': "❌ *ډاونلوډ ناکام شو!*\n\nاړیکه {creator}",
-        'large': "❌ *فایل ډیر لوی دی!*\n\nاندازه: {size}MB\nد ټیلیګرام حد: 50MB"
+        'failed': "❌ *ډاونلوډ ناکام شو!*\n\nاحتمالي لاملونه:\n• غلط لینک\n• خصوصي ویډیو\n• ویډیو ډیره اوږده ده\n\nاړیکه {creator}",
+        'large': "❌ *فایل ډیر لوی دی!*\n\nاندازه: {size}MB\nد ټیلیګرام حد: 50MB",
+        'no_url': "❌ *سم لینک ونه موندل شو!*\n\nمهرباني وکړئ د یوټیوب، تیک تاک، فیسبوک یا بل پلیټفارم څخه ویډیو لینک رالیږئ.",
+        'help': "📚 *مرسته*\n\n1. د ویډیو لینک رالیږئ\n2. د ډاونلوډ کیدو انتظار وکړئ\n3. خپله ویډیو ترلاسه کړئ\n\nملاتړ شوي: یوټیوب، تیک تاک، فیسبوک، انسټاګرام، تویټر، ریډیټ، ویمو، ډیلی موشن، تویچ، او نور!\n\n👨‍💻 جوړونکی: {creator}",
+        'choose_lang': "🌐 *خپله ژبه غوره کړئ:*",
+        'lang_selected': "✅ *ژبه پښتو ته بدله شوه!*\n\nویډیو ډاونلوډ لپاره کوم لینک رالیږئ."
     },
     'farsi': {
-        'welcome': "🔥 *واهدکس دانلودر* 🔥\n\n✨ *خوش آمدید* {name}! ✨\n└ 👤 نام کاربری: @{username}\n└ 📞 شماره: {phone}\n└ 🤖 سازنده بات: {creator}\n\n💫 *من می‌توانم ویدیوها را از این پلتفرم‌ها دانلود کنم:*\n📌 یوتیوب | اینستاگرام | تیک‌تاک\n📌 توییتر/X | فیسبوک | ردیت\n📌 و بیش از ۱۰۰۰ پلتفرم دیگر!\n\n⚡ *فقط لینک ویدیو را برای من بفرستید!*",
-        'instruction': "\n\n📥 *نحوه استفاده:* لینک ویدیو را بفرستید\n🎯 *حداکثر حجم:* 50MB\n👥 *کاربران:* {total}",
+        'start': "🎬 *دانلودر جهانی ویدیو*\n\nلینک ویدیو را از این پلتفرم‌ها بفرستید:\n\n📌 یوتیوب\n📌 تیک‌تاک\n📌 فیسبوک\n📌 اینستاگرام\n📌 توییتر/X\n📌 ردیت\n📌 و بیش از ۱۰۰۰ پلتفرم دیگر!\n\n⚡ *فقط لینک را بفرستید!*",
         'error': "❌ *لینک نامعتبر!*\n\nلطفاً یک لینک معتبر ویدیو بفرستید.",
-        'downloading': "🔄 *در حال دانلود...* لطفاً صبر کنید!",
+        'downloading': "🔄 *در حال دانلود ویدیو...*\n\nلطفاً صبر کنید!",
         'uploading': "📤 *در حال آپلود ویدیو...*",
         'success': "✅ *ویدیو با موفقیت دانلود شد!*",
-        'failed': "❌ *دانلود ناموفق!*\n\nتماس با {creator}",
-        'large': "❌ *فایل خیلی بزرگ است!*\n\nحجم: {size}MB\nمحدودیت تلگرام: 50MB"
+        'failed': "❌ *دانلود ناموفق!*\n\nدلایل احتمالی:\n• لینک نامعتبر\n• ویدیو خصوصی است\n• ویدیو خیلی طولانی است\n\nتماس با {creator}",
+        'large': "❌ *فایل خیلی بزرگ است!*\n\nحجم: {size}MB\nمحدودیت تلگرام: 50MB",
+        'no_url': "❌ *لینک معتبر یافت نشد!*\n\nلطفاً لینک ویدیو را از یوتیوب، تیک‌تاک، فیسبوک یا پلتفرم دیگر بفرستید.",
+        'help': "📚 *راهنما*\n\n1. لینک ویدیو را بفرستید\n2. منتظر دانلود بمانید\n3. ویدیوی خود را دریافت کنید\n\nپشتیبانی: یوتیوب، تیک‌تاک، فیسبوک، اینستاگرام، توییتر، ردیت، ویمو، دیلی موشن، توییچ و بیشتر!\n\n👨‍💻 سازنده: {creator}",
+        'choose_lang': "🌐 *زبان خود را انتخاب کنید:*",
+        'lang_selected': "✅ *زبان به فارسی تغییر کرد!*\n\nبرای دانلود ویدیو، لینک را بفرستید."
     }
 }
 
-# ==================== YT-DLP OPTIONS ====================
-YDL_OPTIONS = {
-    'format': 'best[height<=720]/best',
-    'outtmpl': 'downloads/%(title)s.%(ext)s',
-    'noplaylist': True,
-    'quiet': True,
-    'no_warnings': True,
-    'ignoreerrors': True,
-    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-}
-
-# ==================== FUNCTIONS ====================
-def get_user_lang(user_id):
-    return user_languages.get(user_id, 'english')
-
 def get_text(user_id, key):
-    lang = get_user_lang(user_id)
-    return WELCOME_TEXTS[lang].get(key, WELCOME_TEXTS['english'][key])
+    lang = user_langs.get(user_id, 'english')
+    return LANGUAGES[lang].get(key, LANGUAGES['english'][key])
 
+# ==================== DOWNLOAD FUNCTION ====================
 def download_video(url):
     os.makedirs('downloads', exist_ok=True)
+    
     try:
-        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+        with yt_dlp.YoutubeDL(get_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             
+            # Fix extension if needed
             if not os.path.exists(filename):
                 for ext in ['.mp4', '.webm', '.mkv']:
                     test = filename.rsplit('.', 1)[0] + ext
@@ -92,72 +104,84 @@ def download_video(url):
                         filename = test
                         break
             
+            # Get video info
             duration = info.get('duration', 0)
-            title = info.get('title', 'Video')
-            return filename, title, duration
+            minutes = duration // 60
+            seconds = duration % 60
+            title = info.get('title', 'Video')[:60]
+            platform = info.get('extractor', 'Unknown')
+            
+            return filename, title, minutes, seconds, platform
     except Exception as e:
-        print(f"Error: {e}")
-        return None, None, None
+        print(f"Download error: {e}")
+        return None, None, None, None, None
 
 # ==================== BOT HANDLERS ====================
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
-    name = message.from_user.first_name or "User"
-    username = message.from_user.username or "unknown"
     
-    # Phone number request keyboard
-    keyboard = ReplyKeyboardMarkup(row_width=1, resize_keyboard=True, one_time_keyboard=True)
-    keyboard.add(KeyboardButton("📞 Share My Phone Number", request_contact=True))
+    # Language selection keyboard
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("🇬🇧 English", callback_data="lang_english"),
+        InlineKeyboardButton("🇦🇫 پښتو", callback_data="lang_pashto"),
+        InlineKeyboardButton("🇮🇷 فارسی", callback_data="lang_farsi")
+    )
     
-    welcome = f"🌟 *WAHIDX DOWNLOADER V4.0* 🌟\n\n👤 *Welcome {name}!*\n\n📢 *Please share your phone number* to continue.\n\n👇 *Click the button below:*"
-    bot.send_message(user_id, welcome, parse_mode='Markdown', reply_markup=keyboard)
-
-@bot.message_handler(content_types=['contact'])
-def contact_handler(message):
-    user_id = message.from_user.id
-    contact = message.contact
-    
-    if contact:
-        user_phones[user_id] = contact.phone_number
-        online_users.add(user_id)
-        
-        # Language selection keyboard
-        keyboard = InlineKeyboardMarkup(row_width=2)
-        keyboard.add(
-            InlineKeyboardButton("🇬🇧 English", callback_data="lang_english"),
-            InlineKeyboardButton("🇦🇫 پښتو", callback_data="lang_pashto"),
-            InlineKeyboardButton("🇮🇷 فارسی", callback_data="lang_farsi")
-        )
-        
-        text = f"✅ *Phone number received!*\n\n📞 `{contact.phone_number}`\n\n🌐 *Choose your language:*"
-        bot.send_message(user_id, text, parse_mode='Markdown', reply_markup=keyboard)
-        
-        # Remove phone keyboard
-        markup = ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add(KeyboardButton("/start"))
-        bot.send_message(user_id, "✨ *Main menu ready!* ✨\n\nSend any video link to download!", parse_mode='Markdown', reply_markup=markup)
+    bot.send_message(user_id, get_text(user_id, 'choose_lang'), parse_mode='Markdown', reply_markup=keyboard)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
 def language_callback(call):
     user_id = call.from_user.id
     lang = call.data.split('_')[1]
-    user_languages[user_id] = lang
+    user_langs[user_id] = lang
     
-    name = call.from_user.first_name or "User"
-    username = call.from_user.username or "unknown"
-    phone = user_phones.get(user_id, "Not shared")
-    total = len(user_phones)
-    
-    text = get_text(user_id, 'welcome').format(
-        name=name,
-        username=username,
-        phone=phone,
-        creator=BOT_CREATOR
+    bot.edit_message_text(
+        LANGUAGES[lang]['lang_selected'], 
+        user_id, 
+        call.message.message_id, 
+        parse_mode='Markdown'
     )
-    text += get_text(user_id, 'instruction').format(total=total)
     
-    bot.edit_message_text(text, user_id, call.message.message_id, parse_mode='Markdown')
+    # Send main menu
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("📥 Download Video", callback_data="download"),
+        InlineKeyboardButton("📚 Help", callback_data="help"),
+        InlineKeyboardButton("🌐 Change Language", callback_data="language")
+    )
+    
+    bot.send_message(
+        user_id, 
+        get_text(user_id, 'start'), 
+        parse_mode='Markdown', 
+        reply_markup=keyboard
+    )
+    
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "download")
+def download_callback(call):
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.from_user.id, "📎 *Send me the video link:*", parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == "help")
+def help_callback(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id)
+    bot.send_message(user_id, get_text(user_id, 'help').format(creator=BOT_CREATOR), parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == "language")
+def language_callback_menu(call):
+    user_id = call.from_user.id
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("🇬🇧 English", callback_data="lang_english"),
+        InlineKeyboardButton("🇦🇫 پښتو", callback_data="lang_pashto"),
+        InlineKeyboardButton("🇮🇷 فارسی", callback_data="lang_farsi")
+    )
+    bot.edit_message_text(get_text(user_id, 'choose_lang'), user_id, call.message.message_id, parse_mode='Markdown', reply_markup=keyboard)
     bot.answer_callback_query(call.id)
 
 @bot.message_handler(func=lambda message: True)
@@ -166,20 +190,23 @@ def handle_message(message):
     text = message.text.strip()
     
     # Check if user has selected language
-    if user_id not in user_languages:
-        bot.reply_to(message, "❌ Please send /start first and share your phone number!")
+    if user_id not in user_langs:
+        start_command(message)
         return
     
     # Extract URL
-    urls = re.findall(r'https?://[^\s]+', text)
+    url_pattern = re.compile(r'https?://[^\s]+')
+    urls = url_pattern.findall(text)
+    
     if not urls:
-        bot.reply_to(message, get_text(user_id, 'error'), parse_mode='Markdown')
+        bot.reply_to(message, get_text(user_id, 'no_url'), parse_mode='Markdown')
         return
     
     url = urls[0]
     msg = bot.reply_to(message, get_text(user_id, 'downloading'), parse_mode='Markdown')
     
-    video_path, title, duration = download_video(url)
+    # Download video
+    video_path, title, minutes, seconds, platform = download_video(url)
     
     if video_path and os.path.exists(video_path):
         file_size = os.path.getsize(video_path) / (1024 * 1024)
@@ -191,13 +218,13 @@ def handle_message(message):
         
         bot.edit_message_text(get_text(user_id, 'uploading'), user_id, msg.message_id, parse_mode='Markdown')
         
-        minutes = duration // 60
-        seconds = duration % 60
-        caption = f"🎬 *{title[:50]}*\n⏱️ {minutes}:{seconds:02d}\n\n{get_text(user_id, 'success')}"
+        # Create caption
+        duration_str = f"{minutes}:{seconds:02d}" if minutes or seconds else "Unknown"
+        caption = f"🎬 *{title}*\n\n⏱️ Duration: {duration_str}\n📱 Platform: {platform.upper()}\n\n{get_text(user_id, 'success')}\n\n🤖 @WAHIDX_DOWNLOADER"
         
         try:
             with open(video_path, 'rb') as f:
-                bot.send_video(user_id, f, caption=caption, parse_mode='Markdown', timeout=120)
+                bot.send_video(user_id, f, caption=caption, parse_mode='Markdown', timeout=180)
             bot.delete_message(user_id, msg.message_id)
             os.remove(video_path)
         except Exception as e:
@@ -208,7 +235,7 @@ def handle_message(message):
 # ==================== FLASK HEALTH CHECK ====================
 @app.route('/')
 def home():
-    return f"WAHIDX DOWNLOADER is running! Total users: {len(user_phones)}"
+    return "WAHIDX DOWNLOADER is running! Ready to download videos from YouTube, TikTok, Facebook, and more!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -222,8 +249,9 @@ if __name__ == "__main__":
     
     # Start bot
     print("=" * 50)
-    print("🤖 WAHIDX DOWNLOADER V4.0")
+    print("🤖 WAHIDX UNIVERSAL DOWNLOADER V4.0")
     print(f"👤 Creator: {BOT_CREATOR}")
+    print("📥 Supported: YouTube, TikTok, Facebook, Instagram, Twitter, Reddit, and 1000+ more!")
     print("💪 Bot is running...")
     print("=" * 50)
     
