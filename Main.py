@@ -44,10 +44,10 @@ def keep_alive():
 # --- End Flask Keep Alive ---
 
 # --- Configuration ---
-TOKEN = '8697889132:AAG9w86MIdw8CbKj_ddaW9dRrTfulY8qcds'
+TOKEN = '8607359712:AAGVPHwLolvKL7MZUp16nHcY00yf3bP0R60'
 OWNER_ID = 8518408753
 ADMIN_ID = 8518408753
-YOUR_USERNAME = '@M_o_m_15'
+YOUR_USERNAME = '@Kingwahidafg'
 UPDATE_CHANNEL = 'https://t.me/WahidModeX'
 
 # Folder setup - using absolute paths
